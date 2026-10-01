@@ -49,3 +49,85 @@ function matches() {
   if (!state.preview) return h`<h2>Your lookalikes</h2>${empty('heart', 'No lookalikes yet', 'Face matching is not switched on, so there are no results to show. When it launches, real matches will appear here.', h`<button class="secondary" data-act="preview-on">Preview how this will look</button>`)}`;
   return h`<h2>Your lookalikes</h2>${banner()}${SAMPLES.map((s, i) => h`<div class="card match">${avatar(s.hue)}<div><h3>Sample profile ${i + 1}</h3><div class="muted">${s.place}</div><span class="pill sample">Sample</span></div><div class="end"><button class="secondary small" data-act="request" data-id="${s.id}" ${state.sent[s.id] ? raw('disabled') : ''}>${state.sent[s.id] ? 'Requested' : 'Request'}</button></div></div>`)}<p class="muted">No similarity scores are shown because none are calculated. In the live app, chat opens only after both people accept.</p>`;
 }
+function messages() {
+  if (!state.preview) return h`<h2>Messages</h2>${empty('chat', 'No conversations yet', 'When two people both accept a connection, your chat will appear here.', h`<button class="secondary" data-act="preview-on">Preview how this will look</button>`)}`;
+  return h`<h2>Messages</h2>${banner()}<div class="card"><div class="match">${avatar(0)}<div><h3>Sample profile 1</h3><span class="pill sample">Sample conversation</span></div></div>
+  <div class="bubble">Hi! This is a sample message, so you can see how chats will look.</div><div class="bubble me">Nice. And this is what your reply would look like.</div><div class="bubble">Real chats will only open after you both accept a connection.</div>
+  <div class="composer"><input class="input" disabled placeholder="Chat is off in preview" aria-label="Message"><button class="primary small" disabled>Send</button></div></div>`;
+}
+function profile() {
+  const p = state.profile;
+  return h`<h2>Your profile</h2><div class="card">${photoBtn(p.photo, true)}<label for="name">Display name</label><input class="input" id="name" maxlength="40" value="${p.name}" placeholder="Your display name"><label for="country">Country</label>${countrySelect(p.country)}<button class="primary" data-act="save">Save profile</button></div>
+  <div class="card"><div class="row"><b>Privacy</b><span class="pill">${icon('shield')}</span></div><p class="muted">Your photo is stored on this device only. It is shrunk and re-saved without location data. Your exact location is never collected. Connections will always need both people to agree.</p><button class="danger" data-act="wipe">Delete my data</button></div>`;
+}
+function settings() {
+  const c = state.consent;
+  return h`<h2>Settings</h2><div class="card"><label class="toggle"><span><b>Preview Mode</b><div class="muted">Show clearly labelled sample profiles and chats.</div></span><input type="checkbox" role="switch" data-pref="preview" ${state.preview ? raw('checked') : ''}></label></div>
+  <div class="card"><b>Status</b><p class="muted">Backend: ${backend.label}. Face matching: off. Your data: on this device only.</p>${c ? h`<p class="muted">Consent recorded on this device: ${new Date(c.at).toLocaleDateString()} (terms ${c.version}).</p>` : ''}</div>
+  <div class="card"><b>Install the app</b><p class="muted">${deferredInstall ? 'Add MirrorMatch to your home screen.' : 'On iPhone: tap Share, then Add to Home Screen. On Android: open the browser menu and choose Install app.'}</p>${deferredInstall ? h`<button class="primary" data-act="install">Install</button>` : ''}</div>
+  <button class="danger" data-act="wipe">Delete my data</button>`;
+}
+const routes = { discover, matches, messages, profile, settings };
+const TABS = [['discover', 'Discover', 'discover'], ['matches', 'Matches', 'heart'], ['messages', 'Messages', 'chat'], ['profile', 'Profile', 'user']];
+
+// ---------- Shell ----------
+$('#top').innerHTML = h`<div class="logo">${icon('logo')}</div><div><b>MirrorMatch</b><small>Early preview. Matching not live yet.</small></div><button class="iconbtn" data-go="settings" aria-label="Settings">${icon('sliders')}</button>`.s;
+$('#nav').innerHTML = h`${TABS.map(t => h`<button data-go="${t[0]}">${icon(t[2])}<span>${t[1]}</span></button>`)}`.s;
+
+function render() {
+  app.classList.toggle('onboarding', !state.onboarded);
+  if (!state.onboarded) { screen.innerHTML = onboarding().s; return; }
+  const r = location.hash.replace('#/', ''), route = routes[r] ? r : 'discover';
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.go === route));
+  screen.innerHTML = routes[route]().s;
+  window.scrollTo(0, 0);
+}
+function sync() { // keep unsaved field edits when the screen redraws
+  const n = $('#name'); if (!n) return;
+  const target = state.onboarded ? state.profile : draft;
+  target.name = cleanText(n.value); target.country = readCountry();
+}
+
+const actions = {
+  next() { step++; render(); },
+  back() { step--; render(); },
+  pick() { $('#file').click(); },
+  finish() {
+    sync(); if (!draft.name) return toast('Add a display name to continue.');
+    state.profile = { name: draft.name, country: draft.country, photo: draft.photo };
+    state.consent = { age18: true, biometric: true, terms: true, at: new Date().toISOString(), version: CONSENT_VERSION };
+    state.onboarded = true; if (!save()) toast('Could not save on this device. Check your browser storage settings.');
+    location.hash = '#/discover'; render();
+  },
+  find() { if (!state.profile.photo) return toast('Add a photo first.'); location.hash = '#/matches'; toast('Face matching is not live yet, so there are no results.'); },
+  'preview-on'() { state.preview = true; save(); render(); },
+  request(id) { if (SAMPLES.some(s => s.id === id)) { state.sent[id] = true; save(); render(); toast('Sample request only. Nobody was contacted.'); } },
+  save() { sync(); save(); toast('Profile saved.'); },
+  install() { deferredInstall?.prompt(); deferredInstall = null; render(); },
+  wipe() {
+    if (!confirm('Delete your profile, photo and consent from this device? This cannot be undone.')) return;
+    wipe(); step = 0; Object.assign(draft, { age: false, bio: false, terms: false, name: '', country: '', photo: '' });
+    location.hash = ''; render(); toast('Your data was deleted from this device.');
+  }
+};
+document.addEventListener('click', e => {
+  const go = e.target.closest('[data-go]'); if (go) { location.hash = '#/' + go.dataset.go; return; }
+  const el = e.target.closest('[data-act]'); if (el) actions[el.dataset.act]?.(el.dataset.id);
+});
+document.addEventListener('change', e => {
+  const d = e.target.dataset;
+  if (d.draft) { draft[d.draft] = e.target.checked; const n = $('#next'); if (n) n.disabled = !(draft.age && draft.bio && draft.terms); }
+  if (d.pref === 'preview') { state.preview = e.target.checked; save(); }
+});
+$('#file').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try {
+    const url = await resizeImage(f); sync();
+    if (state.onboarded) { state.profile.photo = url; save(); } else draft.photo = url;
+    render();
+  } catch (err) { toast(err.message); }
+});
+window.addEventListener('hashchange', render);
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; });
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+render();
